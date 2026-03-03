@@ -1,0 +1,3 @@
+[submodule "subfolder-name"]
+	path = subfolder-name
+	url = https://github.com/abria/TeraStitcher.git
