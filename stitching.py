@@ -1,9 +1,9 @@
 """
 Automatic 3D Image Stitching — Monje Lab
 ========================================
-Detects tile grid, prefix, channel, Z slices, and overlap from OME-TIFF filenames,
-stitches each Z slice into a 2D image, and then stacks all Z slices into a 3D TIFF
-using precise weighted feathering in the overlapping regions.
+Detects tile grid, channels, and Z slices from OME-TIFF filenames,
+stitches each Z slice into a 2D image per channel, and saves individually.
+Filename suffix format expected: ...[RR x CC]_C<ch>_z<zzzz>.ome.tif
 """
 
 import os
@@ -40,6 +40,32 @@ def blend_weighted_y(top_ol, bot_ol):
     return ramp * top_ol + (1.0 - ramp) * bot_ol
 
 
+def blend_sinusoidal_x(left_ol, right_ol):
+    """Raised-cosine (sinusoidal) blend along the horizontal axis.
+
+    Uses w(t) = 0.5 * (1 + cos(π·t)) for t ∈ [0, 1], which gives a smooth
+    S-curve with zero derivatives at both endpoints. This avoids the
+    brightness kinks that linear ('weighted') blending can leave at seam
+    boundaries, making it a better choice for tiles with significant
+    illumination variation across the overlap region.
+    """
+    n = left_ol.shape[1]
+    t = np.linspace(0.0, 1.0, n, dtype=np.float32)[None, :]
+    ramp = 0.5 * (1.0 + np.cos(np.pi * t))   # 1 → 0, smooth
+    return ramp * left_ol + (1.0 - ramp) * right_ol
+
+
+def blend_sinusoidal_y(top_ol, bot_ol):
+    """Raised-cosine (sinusoidal) blend along the vertical axis.
+
+    See blend_sinusoidal_x for a full description of the weighting curve.
+    """
+    n = top_ol.shape[0]
+    t = np.linspace(0.0, 1.0, n, dtype=np.float32)[:, None]
+    ramp = 0.5 * (1.0 + np.cos(np.pi * t))
+    return ramp * top_ol + (1.0 - ramp) * bot_ol
+
+
 def blend_average(left, right):
     return 0.5 * (left + right)
 
@@ -54,6 +80,8 @@ def stitch_horizontal(left, right, overlap_px, method):
 
     if method == "weighted":
         blended = blend_weighted_x(left_ol, right_ol)
+    elif method == "sinusoidal":
+        blended = blend_sinusoidal_x(left_ol, right_ol)
     elif method == "average":
         blended = blend_average(left_ol, right_ol)
     elif method == "majority":
@@ -70,6 +98,8 @@ def stitch_vertical(top, bottom, overlap_px, method):
 
     if method == "weighted":
         blended = blend_weighted_y(top_ol, bottom_ol)
+    elif method == "sinusoidal":
+        blended = blend_sinusoidal_y(top_ol, bottom_ol)
     elif method == "average":
         blended = blend_average(top_ol, bottom_ol)
     elif method == "majority":
@@ -90,7 +120,7 @@ def save_image(img, path):
         tifffile.imwrite(path, norm, photometric='minisblack')
     else:
         Image.fromarray(norm).save(path)
-    print(f"\nSaved image: {path} ({norm.shape[1]} x {norm.shape[0]} px)")
+    print(f"  Saved: {path} ({norm.shape[1]} x {norm.shape[0]} px)")
 
 
 def load_tile(path):
@@ -105,20 +135,20 @@ def load_tile(path):
 
 def parse_filename(fname):
     """
-    Extract prefix, row, col, channel, z, and overlap fraction from filename
-    Example:
-    260128_..._20ol_10umstep[00 x 00]_C00_z0100.ome.tif
+    Extract row, col, channel, and z from filename.
+
+    Only the suffix is matched — the prefix before '[RR x CC]' can be anything.
+    Expected suffix format: [RR x CC]_C<ch>_z<zzzz>.ome.tif
+    Example: 260128_anything_prefix[00 x 00]_C00_z0100.ome.tif
     """
     pattern = re.compile(
-        r"(.*?)(?:_(\d+)ol)?(?:_[^_]+)*\[(\d+) x (\d+)\]_C(\d+)_z(\d+).*\.ome\.tif$"
+        r".*\[(\d+) x (\d+)\]_C(\d+)_z(\d+)\.ome\.tif$"
     )
     m = pattern.match(fname)
     if not m:
         return None
-    prefix, ol, row, col, channel, z = m.groups()
-    row, col, channel, z = map(int, (row, col, channel, z))
-    overlap = int(ol)/100 if ol else 0.2
-    return prefix, row, col, channel, z, overlap
+    row, col, channel, z = map(int, m.groups())
+    return row, col, channel, z
 
 
 # -------------------
@@ -127,75 +157,106 @@ def parse_filename(fname):
 def main():
     parser = argparse.ArgumentParser(description="Automatic 3D stitching of OME-TIFF tiles")
     parser.add_argument("--input_dir", required=True, help="Folder containing tiles")
-    parser.add_argument("--method", choices=["weighted", "average", "majority"], default="weighted")
-    parser.add_argument("--output", default="./stitched_3D_output.tif")
+    parser.add_argument("--overlap", type=int, required=True,
+                        help="Tile overlap as an integer percentage (e.g. 20 for 20%%)")
+    parser.add_argument("--method", choices=["weighted", "sinusoidal", "average", "majority"],
+                        default="weighted",
+                        help=(
+                            "Overlap blending method. "
+                            "'weighted': linear ramp (fast, slight edge artefacts). "
+                            "'sinusoidal': raised-cosine ramp (smoother seams, recommended for uneven illumination). "
+                            "'average': equal 50/50 mix. "
+                            "'majority': max-value (bright-field / binary masks)."
+                        ))
     args = parser.parse_args()
+
+    overlap_fraction = args.overlap / 100.0
 
     files = [f for f in os.listdir(args.input_dir) if f.endswith(".ome.tif")]
     tiles = {}
-    prefixes, z_slices, channels = set(), set(), set()
-    overlap = None
+    z_slices, channels = set(), set()
 
     # Parse all files
     for f in files:
         parsed = parse_filename(f)
         if parsed:
-            prefix, row, col, channel, z, ol = parsed
+            row, col, channel, z = parsed
             tiles[(row, col, z, channel)] = os.path.join(args.input_dir, f)
-            prefixes.add(prefix)
             z_slices.add(z)
             channels.add(channel)
-            if overlap is None:
-                overlap = ol
 
     if not tiles:
         sys.exit("No matching OME-TIFF tiles found.")
 
-    prefix = list(prefixes)[0]
-    print(f"Detected prefix: {prefix}")
-    print(f"Detected Z slices: {sorted(z_slices)}, Channels: {sorted(channels)}")
-    print(f"Detected overlap: {overlap*100:.0f}%, Method: {args.method}")
-
     z_slices = sorted(z_slices)
     channels = sorted(channels)
 
-    stitched_planes = []
+    print(f"Detected Z slices : {z_slices}")
+    print(f"Detected channels : {channels}")
+    print(f"Overlap           : {args.overlap}%")
+    print(f"Blend method      : {args.method}")
+
+    # Create one output folder per channel
+    channel_dirs = {}
+    for ch in channels:
+        ch_dir = os.path.join(args.input_dir, f"Channel {ch}")
+        os.makedirs(ch_dir, exist_ok=True)
+        channel_dirs[ch] = ch_dir
+    print(f"\nCreated channel folders: {list(channel_dirs.values())}")
 
     for z in z_slices:
-        print(f"\n--- Stitching Z slice {z} ---")
-        rows = [r for r, c, z_, ch in tiles.keys() if z_ == z]
-        cols = [c for r, c, z_, ch in tiles.keys() if z_ == z]
-        n_rows, n_cols = max(rows)+1, max(cols)+1
-        print(f"Grid: {n_rows} rows x {n_cols} cols")
+        print(f"\n--- Z slice {z:04d} ---")
 
-        sample_tile = load_tile(tiles[(0, 0, z, channels[0])])
+        rows_at_z = [r for r, c, z_, ch in tiles if z_ == z]
+        cols_at_z = [c for r, c, z_, ch in tiles if z_ == z]
+        n_rows, n_cols = max(rows_at_z) + 1, max(cols_at_z) + 1
+        print(f"  Grid: {n_rows} rows x {n_cols} cols")
+
+        # Compute overlap in pixels from one representative tile
+        sample_path = tiles[(0, 0, z, channels[0])]
+        sample_tile = load_tile(sample_path)
         tile_h, tile_w = sample_tile.shape
-        overlap_x = max(1, int(round(overlap * tile_w)))
-        overlap_y = max(1, int(round(overlap * tile_h)))
+        overlap_x = max(1, int(round(overlap_fraction * tile_w)))
+        overlap_y = max(1, int(round(overlap_fraction * tile_h)))
 
-        # Stitch rows
-        rows_stitched = []
-        for r in range(n_rows):
-            row_img = load_tile(tiles[(r, 0, z, channels[0])])
-            for c in range(1, n_cols):
-                row_img = stitch_horizontal(row_img, load_tile(tiles[(r, c, z, channels[0])]), overlap_x, args.method)
-            rows_stitched.append(row_img)
+        for ch in channels:
+            print(f"  Channel {ch} ...")
 
-        # Stitch rows vertically
-        final_img_2D = rows_stitched[0]
-        for r_idx, r_img in enumerate(rows_stitched[1:], start=1):
-            final_img_2D = stitch_vertical(final_img_2D, r_img, overlap_y, args.method)
+            # Stitch each row horizontally
+            rows_stitched = []
+            for r in range(n_rows):
+                row_img = load_tile(tiles[(r, 0, z, ch)])
+                for c in range(1, n_cols):
+                    row_img = stitch_horizontal(
+                        row_img, load_tile(tiles[(r, c, z, ch)]), overlap_x, args.method
+                    )
+                rows_stitched.append(row_img)
 
-        # Save each Z slice individually
-        z_filename = os.path.join(args.input_dir, f"stitched_z{z:04d}.tif")
-        save_image(final_img_2D, z_filename)
-        stitched_planes.append(final_img_2D)
+            # Stitch rows vertically
+            final_img_2D = rows_stitched[0]
+            for r_img in rows_stitched[1:]:
+                final_img_2D = stitch_vertical(final_img_2D, r_img, overlap_y, args.method)
 
-    # Stack all Z slices into 3D
-    stacked_3D = np.stack(stitched_planes, axis=0)
-    save_image(stacked_3D, args.output)
-    print(f"\n3D stacked image saved: {args.output} ({stacked_3D.shape[2]} x {stacked_3D.shape[1]} x {stacked_3D.shape[0]} px)")
+            # Save 2D tif into the channel's subfolder
+            out_name = f"stitched_z{z:04d}_C{ch:02d}.tif"
+            out_path = os.path.join(channel_dirs[ch], out_name)
+            save_image(final_img_2D, out_path)
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":
     main()
+
+
+    # Terastitcher
+    # voxel 1.6 um for x & y, 10 for z
+    # Take more data + stitch the whole image
+    # User inputs output directory, and algorithm automatically makes a folder for each channel
+    # Version control
+    # Image registration --> is there some algorithm to fix the alignment of the tiles?
+    # Scikit image processing?
+    # First stitch togetehr w/o filling in
+    # Then figure out how to fill in to make the same size
+    # Figure out how to pad 0's
+    # Representative images of different methods (e.g. sinusoidal vs weighted)
