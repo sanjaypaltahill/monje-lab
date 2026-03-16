@@ -10,7 +10,7 @@ The workflow is as follows:
 2. Parse their filenames to extract grid position, channel, and Z-slice.
 3. Stitch each row of tiles horizontally using overlap blending (feathered ramp).
 4. Stitch rows vertically using independent vertical blending.
-5. Save one stitched 2D TIFF per Z-slice per channel.
+5. Save one stitched 2D TIFF per Z-slice per channel, organized into per-channel subfolders.
 
 ---
 
@@ -55,14 +55,24 @@ Where:
 
 ## Outputs
 
-- One stitched 2D TIFF per Z-slice per channel, saved in `--input_dir` as:
+One stitched 2D TIFF is saved per Z-slice per channel. Output files are organized into subfolders named `Channel 0`, `Channel 1`, etc., created automatically inside `--input_dir`:
 
 ```
-stitched_z0100_C00.tif
-stitched_z0100_C01.tif
-stitched_z0100_C02.tif
-stitched_z0101_C00.tif
-...
+input_dir/
+  Channel 0/
+    stitched_z0100_C00.tif
+    stitched_z0101_C00.tif
+    stitched_z0102_C00.tif
+    ...
+  Channel 1/
+    stitched_z0100_C01.tif
+    stitched_z0101_C01.tif
+    stitched_z0102_C01.tif
+    ...
+  Channel 2/
+    stitched_z0100_C02.tif
+    stitched_z0101_C02.tif
+    ...
 ```
 
 - Console prints showing detected grid size, Z-slices, channels, overlap, and blend method.
@@ -87,7 +97,7 @@ stitched_z0101_C00.tif
 
 4. **Z-slice and Channel Handling**
    - All Z-slices are processed independently.
-   - For each Z-slice, every channel is stitched and saved as its own 2D TIFF.
+   - For each Z-slice, every channel is stitched and saved as its own 2D TIFF inside its channel subfolder.
 
 ---
 
@@ -100,14 +110,18 @@ python stitch_3d.py \
     --method sinusoidal
 ```
 
-Output files saved in the same folder:
+Output files saved in channel subfolders inside the input directory:
 
 ```
-stitched_z0100_C00.tif
-stitched_z0100_C01.tif
-stitched_z0101_C00.tif
-stitched_z0101_C01.tif
-...
+test_images/
+  Channel 0/
+    stitched_z0100_C00.tif
+    stitched_z0101_C00.tif
+    ...
+  Channel 1/
+    stitched_z0100_C01.tif
+    stitched_z0101_C01.tif
+    ...
 ```
 
 ---
@@ -139,6 +153,7 @@ This S-curve transitions from 1 to 0 with **zero slope at both endpoints**, unli
 - Overlap is interpreted as a percentage of tile width/height.
 - If the filename suffix does not match `[RR x CC]_C<ch>_z<zzzz>.ome.tif`, the tile is silently ignored.
 - `sinusoidal` blending is recommended as the default for fluorescence microscopy data.
+- Channel subfolders (`Channel 0`, `Channel 1`, etc.) are created automatically; no manual setup needed.
 
 ---
 
@@ -156,6 +171,7 @@ This S-curve transitions from 1 to 0 with **zero slope at both endpoints**, unli
 - **"No matching OME-TIFF tiles found"** — Verify your filenames contain the expected suffix `[RR x CC]_C<ch>_z<zzzz>.ome.tif`.
 - **Seams visible** — Switch to `sinusoidal` for the smoothest transitions; `average` and `majority` may produce visible seams.
 - **Out-of-memory errors** — Reduce image size, process subsets of Z-slices, or increase system RAM.
+- **`OSError: N requested and 0 written`** — The output disk is full or the target folder is on a network/cloud-synced drive that is throttling writes. Free up disk space or redirect output to a local directory.
 
 ---
 
