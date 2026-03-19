@@ -1,13 +1,17 @@
-# Monje Lab 2D Image Stitching Script
+# Monje Lab — 2D Image Stitching Script
+
+> Automatic OME-TIFF tile stitching for high-content fluorescence microscopy
+
+---
 
 ## Overview
 
 This script automatically stitches OME-TIFF image tiles into full 2D images per Z-slice and channel. It is designed for high-content microscopy datasets with overlapping tiles, multiple channels, and multiple Z-slices.
 
-The workflow is as follows:
+The workflow proceeds as follows:
 
 1. Detect all tiles in the input folder.
-2. Parse their filenames to extract grid position, channel, and Z-slice.
+2. Parse filenames to extract grid position, channel, and Z-slice.
 3. Stitch each row of tiles horizontally using overlap blending (feathered ramp).
 4. Stitch rows vertically using independent vertical blending.
 5. Save one stitched 2D TIFF per Z-slice per channel, organized into per-channel subfolders.
@@ -23,20 +27,18 @@ The workflow is as follows:
 [RR x CC]_C[channel]_z[ZSLICE].ome.tif
 ```
 
-The prefix before `[RR x CC]` can be anything and is ignored. Example:
+The prefix before `[RR x CC]` can be anything and is captured to name the output folder. Example:
 
 ```
 260128_UltraII_5300148-2R_AF_HNACy3_cfos_2x_thickness3d5_width60_20ol_10umstep[00 x 00]_C00_z0100.ome.tif
 ```
 
-Where:
-
-| Part          | Meaning                             |
-| ------------- | ----------------------------------- |
-| `PREFIX`      | Any string — not parsed or required |
-| `[row x col]` | Tile row and column (zero-indexed)  |
-| `C[channel]`  | Channel number (integer)            |
-| `z[ZSLICE]`   | Z-slice number (integer)            |
+| Part | Meaning |
+|------|---------|
+| `PREFIX` | Any string — captured and used to name the output parent folder |
+| `[row x col]` | Tile row and column (zero-indexed) |
+| `C[channel]` | Channel number (integer) |
+| `z[ZSLICE]` | Z-slice number (integer) |
 
 - All tiles for the same Z-slice and channel form a regular rectangular grid.
 - Overlap is provided by the user as a CLI argument (not inferred from the filename).
@@ -45,59 +47,33 @@ Where:
 
 ## Inputs
 
-| Argument      | Required              | Description                                                                                      |
-| ------------- | --------------------- | ------------------------------------------------------------------------------------------------ |
-| `--input_dir` | Yes                   | Folder containing OME-TIFF tiles                                                                 |
-| `--overlap`   | Yes                   | Tile overlap as an integer percentage (e.g. `20` for 20%)                                        |
-| `--method`    | No (default: `weighted`) | Overlap blending method: `weighted`, `sinusoidal`, `average`, or `majority`                   |
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--input_dir` | Yes | Folder containing OME-TIFF tiles |
+| `--output_dir` | No | Root folder for stitched output. A sub-folder named after the filename prefix is created here. Defaults to `input_dir` if not set. |
+| `--overlap` | Yes | Tile overlap as an integer percentage (e.g. `20` for 20%) |
+| `--method` | No (default: `weighted`) | Overlap blending method: `weighted`, `sinusoidal`, `average`, or `majority` |
 
 ---
 
 ## Outputs
 
-One stitched 2D TIFF is saved per Z-slice per channel. Output files are organized into subfolders named `Channel 0`, `Channel 1`, etc., created automatically inside `--input_dir`:
+One stitched 2D TIFF is saved per Z-slice per channel. Output files are organized into per-channel subfolders inside a parent folder named after the filename prefix:
 
 ```
-input_dir/
-  Channel 0/
-    stitched_z0100_C00.tif
-    stitched_z0101_C00.tif
-    stitched_z0102_C00.tif
-    ...
-  Channel 1/
-    stitched_z0100_C01.tif
-    stitched_z0101_C01.tif
-    stitched_z0102_C01.tif
-    ...
-  Channel 2/
-    stitched_z0100_C02.tif
-    stitched_z0101_C02.tif
-    ...
+output_dir/
+  260128_UltraII_5300148/        ← named from filename prefix
+    Channel 0/
+      stitched_z0100_C00.tif
+      stitched_z0101_C00.tif
+      ...
+    Channel 1/
+      stitched_z0100_C01.tif
+      stitched_z0101_C01.tif
+      ...
 ```
 
-- Console prints showing detected grid size, Z-slices, channels, overlap, and blend method.
-
----
-
-## How It Works
-
-1. **Tile Detection & Parsing**
-   - The script reads all files in the input folder ending with `.ome.tif`.
-   - Filenames are parsed using a regex anchored to the suffix `[RR x CC]_C<ch>_z<zzzz>.ome.tif`. The prefix is ignored entirely.
-   - Tiles are organized in a dictionary keyed by `(row, col, z, channel)`.
-
-2. **Row Stitching (Horizontal)**
-   - Each row of tiles is stitched horizontally.
-   - Overlapping regions between adjacent tiles are blended using the selected method.
-   - For `weighted` and `sinusoidal`, the blending ramp matches the exact overlap width in pixels.
-
-3. **Column Stitching (Vertical)**
-   - Stitched rows are then stitched vertically.
-   - Vertical overlaps are blended independently using a vertical ramp of exact overlap height in pixels.
-
-4. **Z-slice and Channel Handling**
-   - All Z-slices are processed independently.
-   - For each Z-slice, every channel is stitched and saved as its own 2D TIFF inside its channel subfolder.
+The console will also print detected grid size, Z-slices, channels, prefix, overlap, and blend method.
 
 ---
 
@@ -105,37 +81,47 @@ input_dir/
 
 ```bash
 python stitch_3d.py \
-    --input_dir "/Users/spaltahill/test_images" \
+    --input_dir  "/Users/spaltahill/test_images" \
+    --output_dir "/Users/spaltahill/stitched_output" \
     --overlap 20 \
     --method sinusoidal
 ```
 
-Output files saved in channel subfolders inside the input directory:
+---
 
-```
-test_images/
-  Channel 0/
-    stitched_z0100_C00.tif
-    stitched_z0101_C00.tif
-    ...
-  Channel 1/
-    stitched_z0100_C01.tif
-    stitched_z0101_C01.tif
-    ...
-```
+## How It Works
+
+### 1. Tile Detection & Parsing
+- The script reads all files in the input folder ending with `.ome.tif`.
+- Filenames are parsed using a regex anchored to the suffix `[RR x CC]_C<ch>_z<zzzz>.ome.tif`.
+- The prefix (everything before `[RR x CC]`) is captured, stripped of trailing underscores/spaces, and used to name the parent output folder.
+- Tiles are organized in a dictionary keyed by `(row, col, z, channel)`.
+
+### 2. Row Stitching (Horizontal)
+- Each row of tiles is stitched horizontally.
+- Overlapping regions between adjacent tiles are blended using the selected method.
+- For `weighted` and `sinusoidal`, the blending ramp matches the exact overlap width in pixels.
+
+### 3. Column Stitching (Vertical)
+- Stitched rows are then stitched vertically.
+- Vertical overlaps are blended independently using a vertical ramp of exact overlap height in pixels.
+
+### 4. Z-slice and Channel Handling
+- All Z-slices are processed independently.
+- For each Z-slice, every channel is stitched and saved as its own 2D TIFF inside its channel subfolder.
 
 ---
 
 ## Blending Methods
 
-| Method        | Ramp Shape          | Best For                                                                 |
-| ------------- | ------------------- | ------------------------------------------------------------------------ |
-| `weighted`    | Linear              | Fast, general-purpose; slight brightness kink at seam edges              |
-| `sinusoidal`  | Raised cosine (S-curve) | **Recommended.** Smooth seams with zero-slope endpoints; best for tiles with uneven illumination or vignetting |
-| `average`     | Flat 50/50          | Faster but can reduce intensity at seams                                 |
-| `majority`    | Max value           | Sparse bright features, binary masks                                     |
+| Method | Ramp Shape | Best For |
+|--------|------------|----------|
+| `weighted` | Linear | Fast, general-purpose; slight brightness kink at seam edges |
+| `sinusoidal` | Raised cosine (S-curve) | **Recommended.** Smooth seams with zero-slope endpoints; best for tiles with uneven illumination or vignetting |
+| `average` | Flat 50/50 | Faster but can reduce intensity at seams |
+| `majority` | Max value | Sparse bright features, binary masks |
 
-### Sinusoidal blending detail
+### Sinusoidal Blending — Detail
 
 The `sinusoidal` method uses a **raised-cosine ramp**:
 
@@ -153,25 +139,27 @@ This S-curve transitions from 1 to 0 with **zero slope at both endpoints**, unli
 - Overlap is interpreted as a percentage of tile width/height.
 - If the filename suffix does not match `[RR x CC]_C<ch>_z<zzzz>.ome.tif`, the tile is silently ignored.
 - `sinusoidal` blending is recommended as the default for fluorescence microscopy data.
-- Channel subfolders (`Channel 0`, `Channel 1`, etc.) are created automatically; no manual setup needed.
+- Channel subfolders (`Channel 0`, `Channel 1`, etc.) are created automatically inside the prefix-named parent folder; no manual setup needed.
 
 ---
 
 ## Dependencies
 
 - Python 3.8+
-- numpy
-- Pillow (`pip install Pillow`)
-- tifffile (`pip install tifffile`)
+- `numpy`
+- `Pillow` — `pip install Pillow`
+- `tifffile` — `pip install tifffile`
 
 ---
 
 ## Troubleshooting
 
-- **"No matching OME-TIFF tiles found"** — Verify your filenames contain the expected suffix `[RR x CC]_C<ch>_z<zzzz>.ome.tif`.
-- **Seams visible** — Switch to `sinusoidal` for the smoothest transitions; `average` and `majority` may produce visible seams.
-- **Out-of-memory errors** — Reduce image size, process subsets of Z-slices, or increase system RAM.
-- **`OSError: N requested and 0 written`** — The output disk is full or the target folder is on a network/cloud-synced drive that is throttling writes. Free up disk space or redirect output to a local directory.
+| Error / Symptom | Fix |
+|-----------------|-----|
+| `"No matching OME-TIFF tiles found"` | Verify filenames contain the expected suffix `[RR x CC]_C<ch>_z<zzzz>.ome.tif` |
+| Seams visible in output | Switch to `sinusoidal` for smoothest transitions; `average` and `majority` may produce visible seams |
+| Out-of-memory errors | Reduce image size, process subsets of Z-slices, or increase system RAM |
+| `OSError: N requested and 0 written` | Output disk is full or target folder is on a throttled network/cloud-synced drive. Free up space or redirect output to a local directory with `--output_dir` |
 
 ---
 
