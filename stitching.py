@@ -135,20 +135,26 @@ def load_tile(path):
 
 def parse_filename(fname):
     """
-    Extract row, col, channel, and z from filename.
+    Extract row, col, channel, z, and filename prefix.
 
     Only the suffix is matched — the prefix before '[RR x CC]' can be anything.
     Expected suffix format: [RR x CC]_C<ch>_z<zzzz>.ome.tif
     Example: 260128_anything_prefix[00 x 00]_C00_z0100.ome.tif
+
+    Returns:
+        (row, col, channel, z, prefix) or None if the filename doesn't match.
     """
     pattern = re.compile(
-        r".*\[(\d+) x (\d+)\]_C(\d+)_z(\d+)\.ome\.tif$"
+        r"^(.*?)\[(\d+) x (\d+)\]_C(\d+)_z(\d+)\.ome\.tif$"
     )
     m = pattern.match(fname)
     if not m:
         return None
-    row, col, channel, z = map(int, m.groups())
-    return row, col, channel, z
+    prefix_raw = m.group(1)
+    row, col, channel, z = map(int, m.groups()[1:])
+    # Strip trailing underscores/spaces so the folder name is clean
+    prefix = prefix_raw.rstrip("_ ") or "stitched"
+    return row, col, channel, z, prefix
 
 
 # -------------------
@@ -156,7 +162,11 @@ def parse_filename(fname):
 # -------------------
 def main():
     parser = argparse.ArgumentParser(description="Automatic 3D stitching of OME-TIFF tiles")
-    parser.add_argument("--input_dir", required=True, help="Folder containing tiles")
+    parser.add_argument("--input_dir", required=True,
+                        help="Folder containing tiles")
+    parser.add_argument("--output_dir", default=None,
+                        help="Root folder for stitched output. A sub-folder named after the "
+                             "filename prefix is created here. Defaults to input_dir if not set.")
     parser.add_argument("--overlap", type=int, required=True,
                         help="Tile overlap as an integer percentage (e.g. 20 for 20%%)")
     parser.add_argument("--method", choices=["weighted", "sinusoidal", "average", "majority"],
@@ -171,19 +181,23 @@ def main():
     args = parser.parse_args()
 
     overlap_fraction = args.overlap / 100.0
+    root_out = args.output_dir if args.output_dir else args.input_dir
 
     files = [f for f in os.listdir(args.input_dir) if f.endswith(".ome.tif")]
     tiles = {}
     z_slices, channels = set(), set()
+    detected_prefix = None
 
     # Parse all files
     for f in files:
         parsed = parse_filename(f)
         if parsed:
-            row, col, channel, z = parsed
+            row, col, channel, z, prefix = parsed
             tiles[(row, col, z, channel)] = os.path.join(args.input_dir, f)
             z_slices.add(z)
             channels.add(channel)
+            if detected_prefix is None:
+                detected_prefix = prefix  # capture prefix from the first matched file
 
     if not tiles:
         sys.exit("No matching OME-TIFF tiles found.")
@@ -191,15 +205,21 @@ def main():
     z_slices = sorted(z_slices)
     channels = sorted(channels)
 
+    # Build parent output folder:  <root_out>/<prefix>/
+    parent_dir = os.path.join(root_out, detected_prefix)
+    os.makedirs(parent_dir, exist_ok=True)
+
     print(f"Detected Z slices : {z_slices}")
     print(f"Detected channels : {channels}")
+    print(f"Detected prefix   : {detected_prefix}")
     print(f"Overlap           : {args.overlap}%")
     print(f"Blend method      : {args.method}")
+    print(f"Output parent dir : {parent_dir}")
 
-    # Create one output folder per channel
+    # Create one output folder per channel inside the parent folder
     channel_dirs = {}
     for ch in channels:
-        ch_dir = os.path.join(args.input_dir, f"Channel {ch}")
+        ch_dir = os.path.join(parent_dir, f"Channel {ch}")
         os.makedirs(ch_dir, exist_ok=True)
         channel_dirs[ch] = ch_dir
     print(f"\nCreated channel folders: {list(channel_dirs.values())}")
@@ -247,16 +267,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-    # Terastitcher
-    # voxel 1.6 um for x & y, 10 for z
-    # Take more data + stitch the whole image
-    # User inputs output directory, and algorithm automatically makes a folder for each channel
-    # Version control
-    # Image registration --> is there some algorithm to fix the alignment of the tiles?
-    # Scikit image processing?
-    # First stitch togetehr w/o filling in
-    # Then figure out how to fill in to make the same size
-    # Figure out how to pad 0's
-    # Representative images of different methods (e.g. sinusoidal vs weighted)
