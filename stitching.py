@@ -219,7 +219,7 @@ def main():
     # Create one output folder per channel inside the parent folder
     channel_dirs = {}
     for ch in channels:
-        ch_dir = os.path.join(parent_dir, f"Channel {ch}")
+        ch_dir = os.path.join(parent_dir, f"channel_{ch}")
         os.makedirs(ch_dir, exist_ok=True)
         channel_dirs[ch] = ch_dir
     print(f"\nCreated channel folders: {list(channel_dirs.values())}")
@@ -240,7 +240,7 @@ def main():
         overlap_y = max(1, int(round(overlap_fraction * tile_h)))
 
         for ch in channels:
-            print(f"  Channel {ch} ...")
+            print(f"  channel_{ch} ...")
 
             # Stitch each row horizontally
             rows_stitched = []
