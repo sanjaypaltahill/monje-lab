@@ -52,6 +52,12 @@ def blend_sinusoidal_x(left_ol, right_ol):
     n = left_ol.shape[1]
     t = np.linspace(0.0, 1.0, n, dtype=np.float32)[None, :]
     ramp = 0.5 * (1.0 + np.cos(np.pi * t))   # 1 → 0, smooth
+
+    # CHANGE: If left_ol =0, then give all the weight to right_ol, so make ramp 0
+    ## If right_ol =0, then make ramp = 1 
+    ## On individual pixels (matrix way)
+    ramp[left_ol == 0] = 0 ## Changed
+    ramp[right_ol == 0] = 1 ## Changed
     return ramp * left_ol + (1.0 - ramp) * right_ol
 
 
