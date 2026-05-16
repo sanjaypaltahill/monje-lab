@@ -4,9 +4,9 @@ test_mode.py — Monje Lab Stitcher
 Test-mode diagnostics for a single tile pair.
 
 Produces three outputs per run:
-  1. <tag>_NAIVE.png      — red/green/yellow overlay without any correction
-  2. <tag>_CORRECTED.png  — red/green/yellow overlay with PCC correction applied
-  3. <tag>_STITCHED.tif   — sinusoidal-blended stitch of the pair
+  1. <tag>_NAIVE.png      — red/green overlay without any correction
+  2. <tag>_CORRECTED.png  — red/green overlay with PCC correction applied
+  3. <tag>_STITCHED.tif   — blended stitch of the pair
 
 Each PNG shows:
   • Left panel  : false-colour composite (red = tile A, green = tile B)
@@ -27,7 +27,7 @@ from registration import (
     estimate_shift_vertical,
     apply_shift_skimage,
 )
-from blending import stitch_pair_horizontal, stitch_pair_vertical
+from blending import stitch_pair
 
 
 # ─────────────────────────────────────────────
@@ -111,7 +111,7 @@ def save_rg_overlay(img_fixed, img_moving, out_path,
 def _test_horizontal(tiles, z, ref_ch,
                      overlap_x, tile_h, tile_w,
                      fudge, upsample, max_shift,
-                     out_dir, row_idx, col_idx):
+                     out_dir, row_idx, col_idx, blend="average"):
 
     tag = f"H_r{row_idx}_c{col_idx}-{col_idx+1}_z{z:04d}"
     print(f"\n  TEST — HORIZONTAL  row={row_idx}, cols {col_idx}↔{col_idx+1}, Z={z}")
@@ -134,7 +134,7 @@ def _test_horizontal(tiles, z, ref_ch,
     nominal_dx = tile_w - overlap_x
     print(f"  Nominal dx={nominal_dx}  PCC correction: dy={dy:+.2f}, dx={dx:+.2f}")
 
-    # ── Canvas size ────────────────────────────────────────────────
+    # ── Canvas for diagnostic overlays ────────────────────────────
     canvas_h = tile_h + abs(int(dy)) + 20
     canvas_w = tile_w + nominal_dx + abs(int(dx)) + 20
 
@@ -164,7 +164,8 @@ def _test_horizontal(tiles, z, ref_ch,
                     title="CORRECTED horizontal placement", zoom_region=zoom)
 
     # ── Stitched TIFF ──────────────────────────────────────────────
-    stitched = stitch_pair_horizontal(img_a, img_b, overlap_x)
+    effective_overlap = max(1, overlap_x - int(round(dx)))
+    stitched = stitch_pair(img_a, img_b, effective_overlap, axis="h", blend=blend)
     save_tiff(stitched, os.path.join(out_dir, f"test_{tag}_STITCHED.tif"))
     print(f"\n  Outputs written to: {out_dir}")
 
@@ -176,7 +177,7 @@ def _test_horizontal(tiles, z, ref_ch,
 def _test_vertical(tiles, z, ref_ch,
                    overlap_y, tile_h, tile_w,
                    fudge, upsample, max_shift,
-                   out_dir, row_idx, col_idx):
+                   out_dir, row_idx, col_idx, blend="average"):
 
     tag = f"V_c{col_idx}_r{row_idx}-{row_idx+1}_z{z:04d}"
     print(f"\n  TEST — VERTICAL  col={col_idx}, rows {row_idx}↔{row_idx+1}, Z={z}")
@@ -199,7 +200,7 @@ def _test_vertical(tiles, z, ref_ch,
     nominal_dy = tile_h - overlap_y
     print(f"  Nominal dy={nominal_dy}  PCC correction: dy={dy:+.2f}, dx={dx:+.2f}")
 
-    # ── Canvas size ────────────────────────────────────────────────
+    # ── Canvas for diagnostic overlays ────────────────────────────
     canvas_h = tile_h + nominal_dy + abs(int(dy)) + 20
     canvas_w = tile_w + abs(int(dx)) + 20
 
@@ -229,7 +230,8 @@ def _test_vertical(tiles, z, ref_ch,
                     title="CORRECTED vertical placement", zoom_region=zoom)
 
     # ── Stitched TIFF ──────────────────────────────────────────────
-    stitched = stitch_pair_vertical(img_a, img_b, overlap_y)
+    effective_overlap = max(1, overlap_y - int(round(dy)))
+    stitched = stitch_pair(img_a, img_b, effective_overlap, axis="v", blend=blend)
     save_tiff(stitched, os.path.join(out_dir, f"test_{tag}_STITCHED.tif"))
     print(f"\n  Outputs written to: {out_dir}")
 
@@ -244,7 +246,8 @@ def run_test(tiles, z, ref_ch,
              fudge, upsample, max_shift,
              out_dir,
              row_idx=0, col_idx=0,
-             orientation="horizontal"):
+             orientation="horizontal",
+             blend="average"):
     """
     Dispatch to the horizontal or vertical test helper.
 
@@ -255,11 +258,11 @@ def run_test(tiles, z, ref_ch,
         _test_horizontal(tiles, z, ref_ch,
                          overlap_x, tile_h, tile_w,
                          fudge, upsample, max_shift,
-                         out_dir, row_idx, col_idx)
+                         out_dir, row_idx, col_idx, blend)
     else:
         _test_vertical(tiles, z, ref_ch,
                        overlap_y, tile_h, tile_w,
                        fudge, upsample, max_shift,
-                       out_dir, row_idx, col_idx)
+                       out_dir, row_idx, col_idx, blend)
     print("=" * 60)
     print("\nTest done. Review the PNGs, then re-run with --mode real.")

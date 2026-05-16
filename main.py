@@ -1,7 +1,16 @@
+## Fix grid overlay
+## Set fudge to 0 
+## Commit version to Github --> commit to my branch
+## Visualize 0 pad rows
+## Try diff padding
+
+## Next mtg: 11am Tue 
+
+
 """
 main.py — Monje Lab Stitcher  (entry point)
 =============================================
-Two modes only:
+Two modes:
 
   test  — Inspect a single tile pair.  Produces three diagnostic outputs:
            <tag>_NAIVE.png, <tag>_CORRECTED.png, <tag>_STITCHED.tif
@@ -13,14 +22,13 @@ Two modes only:
            With --z_slice N : only that Z slice.
            Without --z_slice: every Z slice (full 3-D volume).
            Outputs go to:
-             <output_dir>/<prefix>_registered/Channel_<ch>/   (corrected)
+             <output_dir>/<prefix>_registered/Channel_<ch>/    (corrected)
              <output_dir>/<prefix>_registered/Channel_<ch>_NAIVE/
 
 Usage examples
 --------------
-  # Test horizontal pair at row 5, col 3, Z 0:
-  python main.py --input_dir /data --overlap 10 --mode test \\
-                 --row_idx 5 --col_idx 3 --orientation horizontal
+  # Test horizontal pair at row 0, col 0, Z 0:
+  python main.py --input_dir /data --overlap 10 --mode test
 
   # Test vertical pair at row 2, col 1, Z 7:
   python main.py --input_dir /data --overlap 10 --mode test \\
@@ -38,10 +46,10 @@ import sys
 import argparse
 
 from io_utils import discover_tiles, grid_dims, load_tile, save_tiff
-from registration import compute_positions, extract_corrections
-from stitching import stitch_full_slice, stitch_full_slice_naive
+from stitching import compute_shifts, stitch_full_slice, stitch_full_slice_naive
 from test_mode import run_test
 from visualization import save_grid_overlay
+
 
 # ─────────────────────────────────────────────
 #  ARG PARSING
@@ -49,7 +57,7 @@ from visualization import save_grid_overlay
 
 def build_parser():
     p = argparse.ArgumentParser(
-        description="Monje Lab tile stitcher — phase-correlation registration + sinusoidal blending",
+        description="Monje Lab tile stitcher — phase-correlation registration + blending",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -61,18 +69,17 @@ def build_parser():
                    help="Nominal tile overlap as %% of tile size (e.g. 10)")
     p.add_argument("--mode",       choices=["test", "real"], default="real",
                    help="'test': inspect one tile pair | 'real': full stitch")
-    p.add_argument(
-        "--visualize",
-        action="store_true",
-        help="Save grid-overlay PNGs during real mode",
-    )
+    p.add_argument("--visualize",  action="store_true",
+                   help="Save grid-overlay PNGs during real mode")
+    p.add_argument("--blend", choices=["average", "sinusoidal"], default="average",
+                   help="Blending method in the overlap zone (default: average)")
 
     # Registration parameters
     p.add_argument("--max_shift",  type=int, default=50,
                    help="Maximum plausible shift (px). "
                         "Detections exceeding this are zeroed (default: 50)")
-    p.add_argument("--fudge",      type=int, default=10,
-                   help="Search margin beyond the nominal overlap region (px, default: 10)")
+    p.add_argument("--fudge",      type=int, default=100,
+                   help="Search margin beyond nominal overlap for PCC strip (px, default: 10)")
     p.add_argument("--ref_channel", type=int, default=None,
                    help="Channel index used for registration (default: first channel found)")
     p.add_argument("--upsample",   type=int, default=10,
@@ -99,8 +106,8 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
 
-    root_out     = args.output_dir or args.input_dir
-    frac         = args.overlap / 100.0
+    root_out = args.output_dir or args.input_dir
+    frac     = args.overlap / 100.0
 
     # ── Discover tiles ──────────────────────────────────────────────
     tiles, zs, chs, prefix = discover_tiles(args.input_dir)
@@ -148,6 +155,7 @@ def main():
     print(f"  Max shift   : ±{args.max_shift} px (corrections beyond this → zeroed)")
     print(f"  Fudge       : +{args.fudge} px search margin")
     print(f"  Upsample    : {args.upsample}× → {1/args.upsample:.2f} px accuracy")
+    print(f"  Blend       : {args.blend}")
     if args.mode == "test":
         print(f"  Orientation : {args.orientation}")
         print(f"  Row / Col   : {args.row_idx} / {args.col_idx}")
@@ -157,34 +165,28 @@ def main():
     out_dir = os.path.join(root_out, (prefix or "output") + "_registered")
     os.makedirs(out_dir, exist_ok=True)
 
-    viz_dir = None
-
-    if args.visualize:
-        viz_dir = os.path.join(out_dir, "grid_overlays")
-        os.makedirs(viz_dir, exist_ok=True)
-
     # ── TEST MODE ───────────────────────────────────────────────────
     if args.mode == "test":
         run_test(
-            tiles    = tiles,
-            z        = work_z,
-            ref_ch   = ref_ch,
-            overlap_x = ov_x,
-            overlap_y = ov_y,
-            tile_h   = tile_h,
-            tile_w   = tile_w,
-            fudge    = args.fudge,
-            upsample = args.upsample,
-            max_shift = args.max_shift,
-            out_dir  = out_dir,
-            row_idx  = args.row_idx,
-            col_idx  = args.col_idx,
+            tiles      = tiles,
+            z          = work_z,
+            ref_ch     = ref_ch,
+            overlap_x  = ov_x,
+            overlap_y  = ov_y,
+            tile_h     = tile_h,
+            tile_w     = tile_w,
+            fudge      = args.fudge,
+            upsample   = args.upsample,
+            max_shift  = args.max_shift,
+            out_dir    = out_dir,
+            row_idx    = args.row_idx,
+            col_idx    = args.col_idx,
             orientation = args.orientation,
+            blend      = args.blend,
         )
         return
 
     # ── REAL MODE ───────────────────────────────────────────────────
-    # Create per-channel output folders
     ch_dirs       = {}
     ch_dirs_naive = {}
     for ch in chs:
@@ -195,6 +197,11 @@ def main():
         d_naive = os.path.join(out_dir, f"Channel_{ch:02d}_NAIVE")
         os.makedirs(d_naive, exist_ok=True)
         ch_dirs_naive[ch] = d_naive
+
+    viz_dir = None
+    if args.visualize:
+        viz_dir = os.path.join(out_dir, "grid_overlays")
+        os.makedirs(viz_dir, exist_ok=True)
 
     for z in work_zs:
         print(f"\n{'='*60}")
@@ -209,38 +216,70 @@ def main():
         n_rows, n_cols = grid_dims(tiles, z)
         print(f"  Grid: {n_rows} rows × {n_cols} cols")
 
-        # Recompute overlap in px from a live tile at this Z (handles Z-varying dims)
+        # Recompute overlap in px from a live tile at this Z
         sp = next(v for (r, c, z_, ch), v in tiles.items() if z_ == z and ch == ref_ch)
         th, tw = load_tile(sp).shape
         ov_x_z = max(1, int(round(frac * tw)))
         ov_y_z = max(1, int(round(frac * th)))
 
-        # Solve registration
-        pos = compute_positions(
-            tiles, z, n_rows, n_cols,
-            ov_x_z, ov_y_z, th, tw,
-            args.max_shift, args.fudge, ref_ch, args.upsample,
-        )
-        dy_per_col, dx_per_row_col = extract_corrections(
-            pos, th, tw, ov_x_z, ov_y_z,
-        )
-
         if args.visualize:
+            from registration import estimate_shift_horizontal, estimate_shift_vertical
+            import numpy as np
+            pos = np.zeros((n_rows, n_cols, 2))
+ 
+            # Horizontal pass: accumulate x positions and vertical drift
+            for r in range(n_rows):
+                for c in range(1, n_cols):
+                    path_a = tiles.get((r, c - 1, z, ref_ch))
+                    path_b = tiles.get((r, c,     z, ref_ch))
+                    if path_a and path_b:
+                        img_a = load_tile(path_a)
+                        img_b = load_tile(path_b)
+                        dy, dx = estimate_shift_horizontal(
+                            img_a, img_b, ov_x_z,
+                            fudge=args.fudge, upsample=args.upsample,
+                            max_shift=args.max_shift,
+                        )
+                    else:
+                        dy, dx = 0.0, 0.0
+                    pos[r, c, 0] = pos[r, c - 1, 0] + dy
+                    pos[r, c, 1] = pos[r, c - 1, 1] + (tw - ov_x_z) + dx
+ 
+            # Vertical pass: accumulate y positions and lateral drift
+            for c in range(n_cols):
+                for r in range(1, n_rows):
+                    path_a = tiles.get((r - 1, c, z, ref_ch))
+                    path_b = tiles.get((r,     c, z, ref_ch))
+                    if path_a and path_b:
+                        img_a = load_tile(path_a)
+                        img_b = load_tile(path_b)
+                        dy, dx = estimate_shift_vertical(
+                            img_a, img_b, ov_y_z,
+                            fudge=args.fudge, upsample=args.upsample,
+                            max_shift=args.max_shift,
+                        )
+                    else:
+                        dy, dx = 0.0, 0.0
+                    pos[r, c, 0] = pos[r - 1, c, 0] + (th - ov_y_z) + dy
+                    pos[r, c, 1] = pos[r - 1, c, 1] + dx
+ 
             save_grid_overlay(
-                pos,
-                th,
-                tw,
-                n_rows,
-                n_cols,
-                z,
+                pos, th, tw, n_rows, n_cols, z,
                 os.path.join(viz_dir, f"grid_z{z:04d}.png"),
             )
+ 
+        plan = compute_shifts(tiles, z, ch, n_rows, n_cols, ov_x_z, ov_y_z,
+                           fudge=args.fudge, upsample=args.upsample, max_shift=args.max_shift)
+
+        print(f'plan: {plan}')
+        print(f'pos: {pos}')
 
         for ch in chs:
             # NAIVE
             print(f"\n  Channel {ch} — NAIVE …")
             img_naive = stitch_full_slice_naive(
                 tiles, z, ch, n_rows, n_cols, ov_x_z, ov_y_z,
+                blend=args.blend,
             )
             save_tiff(img_naive,
                       os.path.join(ch_dirs_naive[ch],
@@ -250,8 +289,8 @@ def main():
             print(f"\n  Channel {ch} — CORRECTED …")
             img_corr = stitch_full_slice(
                 tiles, z, ch, n_rows, n_cols, ov_x_z, ov_y_z,
-                dy_per_col=dy_per_col,
-                dx_per_row_col=dx_per_row_col,
+                blend     = args.blend,
+                plan     = plan,  # ← compute shifts on the fly for each join
             )
             save_tiff(img_corr,
                       os.path.join(ch_dirs[ch],
